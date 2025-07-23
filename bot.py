@@ -1,4 +1,5 @@
 
+import os
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -59,7 +60,10 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['action'] = None
 
 def main():
-    app = ApplicationBuilder().token("YOUR_TOKEN_HERE").build()
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise ValueError("BOT_TOKEN is not set in environment variables.")
+    app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
