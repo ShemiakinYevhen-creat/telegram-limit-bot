@@ -13,7 +13,7 @@ MOM_ID = 163952863
 keyboard = [["➖ Витрати"], ["🎯 Ліміт", "💰 Баланс"]]
 markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Flask для Render
+# Flask для перевірки
 app_flask = Flask(__name__)
 
 @app_flask.route("/")
@@ -84,28 +84,20 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 from telegram.ext import Application
 telegram_app: Application
 
-async def setup():
-    global telegram_app
+if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise ValueError("BOT_TOKEN is not set.")
     telegram_app = ApplicationBuilder().token(token).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
     telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
 
-    # Встановлюємо webhook
     webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
-    await telegram_app.bot.set_webhook(webhook_url)
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(telegram_app.bot.set_webhook(webhook_url))
 
-    # Запускаємо додаток (асинхронно)
     telegram_app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
         url_path="",
         webhook_url=webhook_url
     )
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(setup())
