@@ -1,120 +1,134 @@
-import os, json, time, threading, requests, pickle
+import json
+import os
+import threading
+import time
 from datetime import datetime
-from flask import Flask, request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
+from flask import Flask
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-# ======= CONFIG =======
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PING_URL = os.getenv("PING_URL")
-GOOGLE_CREDENTIALS = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-DATA_FILE = "data.pkl"
-MONTHLY_LIMIT = 40000
-# ======================
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+DATA_FILE = "data.json"
+PING_URL = os.getenv("PING_URL", "https://telegram-limit-bot.onrender.com")
 
-# ======= GOOGLE DRIVE CLIENT =======
-def upload_backup():
-    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS)
-    service = build('drive', 'v3', credentials=creds)
-    file_metadata = {'name': f'backup_{int(time.time())}.pkl', 'parents': [GOOGLE_DRIVE_FOLDER_ID]}
-    media = MediaFileUpload(DATA_FILE, mimetype='application/octet-stream')
-    service.files().create(body=file_metadata, media_body=media).execute()
-# ===================================
+# ===== Збереження даних =====
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {"limit": 40000, "balance": 40000, "expenses": [], "incomes": [], "archive": {}}
 
-# ======= DATA STORAGE =======
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "rb") as f:
-        data = pickle.load(f)
-else:
-    data = {"expenses": [], "income": [], "balance": MONTHLY_LIMIT}
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def save_data():
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump(data, f)
-    upload_backup()
-# ============================
+data = load_data()
 
-# ======= PING FUNCTION =======
-def ping_self():
+# ===== Кнопки =====
+MAIN_MENU = ReplyKeyboardMarkup(
+    [["Витрати", "Дохід"], ["Звіт", "Видалити витрату"]],
+    resize_keyboard=True
+)
+
+# ===== Логіка =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привіт! Відправ суму або обери дію:", reply_markup=MAIN_MENU)
+
+async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введи суму витрати:")
+    return 1
+
+async def save_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text)
+        data["expenses"].append({"amount": amount, "date": str(datetime.now())})
+        data["balance"] -= amount
+        save_data(data)
+        await update.message.reply_text(f"Додано витрату: {amount} грн\nБаланс: {data['balance']} грн", reply_markup=MAIN_MENU)
+    except:
+        await update.message.reply_text("Невірний формат. Введи число.")
+    return ConversationHandler.END
+
+async def add_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введи суму доходу:")
+    return 2
+
+async def save_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text)
+        data["incomes"].append({"amount": amount, "date": str(datetime.now())})
+        save_data(data)
+        await update.message.reply_text(f"Додано дохід: {amount} грн", reply_markup=MAIN_MENU)
+    except:
+        await update.message.reply_text("Невірний формат. Введи число.")
+    return ConversationHandler.END
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total_exp = sum(x["amount"] for x in data["expenses"])
+    total_inc = sum(x["amount"] for x in data["incomes"])
+    await update.message.reply_text(
+        f"📊 Звіт за поточний місяць:\n"
+        f"Дохід: {total_inc} грн\n"
+        f"Витрати: {total_exp} грн\n"
+        f"Баланс: {data['balance']} грн",
+        reply_markup=MAIN_MENU
+    )
+
+async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if data["expenses"]:
+        last = data["expenses"].pop()
+        data["balance"] += last["amount"]
+        save_data(data)
+        await update.message.reply_text(f"Видалено витрату {last['amount']} грн.\nБаланс: {data['balance']} грн", reply_markup=MAIN_MENU)
+    else:
+        await update.message.reply_text("Немає витрат для видалення.", reply_markup=MAIN_MENU)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Скасовано.", reply_markup=MAIN_MENU)
+    return ConversationHandler.END
+
+# ===== Пінг Render =====
+def ping():
+    import requests
     while True:
         try:
-            if PING_URL:
-                requests.get(PING_URL)
-        except Exception as e:
-            print(f"Ping error: {e}")
-        time.sleep(300)
-threading.Thread(target=ping_self, daemon=True).start()
-# =============================
+            requests.get(PING_URL)
+        except:
+            pass
+        time.sleep(300)  # кожні 5 хвилин
 
-# ======= TELEGRAM BOT =======
+# ===== Flask для вебхука =====
 app = Flask(__name__)
-bot_app = ApplicationBuilder().token(TOKEN).build()
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Додати витрату", callback_data="add_expense")],
-        [InlineKeyboardButton("Додати дохід", callback_data="add_income")],
-        [InlineKeyboardButton("Подивитись баланс", callback_data="check_balance")]
-    ]
-    await update.message.reply_text("Що хочеш зробити?", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "add_expense":
-        await query.edit_message_text("Введи суму витрати:")
-        context.user_data["action"] = "add_expense"
-    elif query.data == "add_income":
-        await query.edit_message_text("Введи суму доходу:")
-        context.user_data["action"] = "add_income"
-    elif query.data == "check_balance":
-        await query.edit_message_text(f"Поточний баланс: {data['balance']} грн")
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = context.user_data.get("action")
-    if action == "add_expense":
-        try:
-            amount = float(update.message.text)
-            data["expenses"].append({"amount": amount, "date": str(datetime.now())})
-            data["balance"] -= amount
-            save_data()
-            await update.message.reply_text(f"Витрата {amount} грн додана. Баланс: {data['balance']} грн")
-        except:
-            await update.message.reply_text("Некоректне число!")
-        context.user_data.pop("action")
-    elif action == "add_income":
-        try:
-            amount = float(update.message.text)
-            data["income"].append({"amount": amount, "date": str(datetime.now())})
-            save_data()
-            await update.message.reply_text(f"Дохід {amount} грн доданий.")
-        except:
-            await update.message.reply_text("Некоректне число!")
-        context.user_data.pop("action")
-
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CallbackQueryHandler(button_handler))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-# ============================
-
-# ======= FLASK WEBHOOK =======
-@app.route(f"/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    bot_app.update_queue.put_nowait(update)
-    return "ok"
 
 @app.route("/")
-def home():
+def index():
     return "Bot is running!"
-# =============================
 
 if __name__ == "__main__":
-    import asyncio
-    from telegram.ext import Application
-    from googleapiclient.http import MediaFileUpload
-    asyncio.get_event_loop().run_until_complete(bot_app.bot.set_webhook(f"{PING_URL}/webhook"))
-    app.run(host="0.0.0.0", port=10000)
+    threading.Thread(target=ping, daemon=True).start()
+
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex("^Витрати$"), add_expense),
+            MessageHandler(filters.Regex("^Дохід$"), add_income)
+        ],
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_expense)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_income)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Regex("^Звіт$"), report))
+    application.add_handler(MessageHandler(filters.Regex("^Видалити витрату$"), delete_last))
+    application.add_handler(conv_handler)
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000)),
+        url_path=TOKEN,
+        webhook_url=f"{PING_URL}/{TOKEN}"
+    )
