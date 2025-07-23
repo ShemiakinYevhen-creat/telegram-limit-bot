@@ -4,6 +4,9 @@ from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
+# Доступ дозволено лише цим ID
+ALLOWED_USERS = [84807467, 163952863]
+
 # Дані бота
 user_data = {'limit': 0, 'dad_spent': 0, 'mom_spent': 0}
 DAD_ID = 84807467
@@ -21,11 +24,22 @@ def home():
 def run_flask():
     app_flask.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
+# Перевірка доступу
+async def check_access(update: Update):
+    user = update.message.from_user
+    if user.id not in ALLOWED_USERS:
+        print(f"[ACCESS DENIED] {user.first_name} ({user.id}) tried to use the bot.")
+        await update.message.reply_text("❌ У вас немає доступу до цього бота.")
+        return False
+    return True
+
 # Telegram хендлери
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
     await update.message.reply_text("👋 Привіт! Я — ваш родинний бот. Оберіть дію:", reply_markup=markup)
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
     text = update.message.text
     if text == "➖ Витрати":
         await update.message.reply_text("Введи суму витрати:")
@@ -46,6 +60,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_access(update): return
     text = update.message.text
     try:
         amount = float(text)
@@ -53,21 +68,22 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введи правильну суму.")
         return
 
-    user_id = update.message.from_user.id
+    user = update.message.from_user
     action = context.user_data.get('action')
 
     if action == 'limit':
         user_data['limit'] = amount
+        print(f"[LIMIT] {user.first_name} ({user.id}) set limit to {amount} грн.")
         await update.message.reply_text(f"🎯 Встановлено ліміт: {amount} грн")
     elif action == 'spend':
-        if user_id == DAD_ID:
+        if user.id == DAD_ID:
             user_data['dad_spent'] += amount
+            print(f"[EXPENSE] Суперпапа додав {amount} грн. Загальні витрати Папи: {user_data['dad_spent']}")
             await update.message.reply_text(f"➖ Додано витрату: {amount} грн (Суперпапа)")
-        elif user_id == MOM_ID:
+        elif user.id == MOM_ID:
             user_data['mom_spent'] += amount
+            print(f"[EXPENSE] Супермама додала {amount} грн. Загальні витрати Мами: {user_data['mom_spent']}")
             await update.message.reply_text(f"➖ Додано витрату: {amount} грн (Супермама)")
-        else:
-            await update.message.reply_text("❌ Ви не маєте доступу.")
     context.user_data['action'] = None
 
 def run_telegram():
