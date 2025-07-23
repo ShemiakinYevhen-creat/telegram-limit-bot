@@ -71,20 +71,21 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
     render_url = os.getenv("RENDER_EXTERNAL_URL")
-    webhook_url = render_url + "/webhook"
+    path = "webhook"
+    webhook_url = f"{render_url}/{path}"
 
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
 
-    # Встановлюємо webhook перед запуском
+    # Встановлюємо webhook
     asyncio.get_event_loop().run_until_complete(app.bot.set_webhook(webhook_url))
 
     # Запускаємо сервер
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
-        url_path="",
+        url_path=path,
         webhook_url=webhook_url
     )
