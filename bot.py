@@ -1,4 +1,5 @@
 import os
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -69,13 +70,18 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Запуск
 if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    webhook_url = render_url + "/webhook"
+
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
 
-    # Webhook
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
+    # Встановлюємо webhook перед запуском
+    asyncio.get_event_loop().run_until_complete(app.bot.set_webhook(webhook_url))
+
+    # Запускаємо сервер
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
