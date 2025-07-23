@@ -13,7 +13,7 @@ MOM_ID = 163952863
 keyboard = [["➖ Витрати"], ["🎯 Ліміт", "💰 Баланс"]]
 markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Flask для перевірки
+# Flask для Render
 app_flask = Flask(__name__)
 
 @app_flask.route("/")
@@ -92,9 +92,12 @@ if __name__ == "__main__":
     telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
 
     webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
+    # Синхронно реєструємо вебхук
     import asyncio
-    asyncio.get_event_loop().run_until_complete(telegram_app.bot.set_webhook(webhook_url))
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(telegram_app.bot.set_webhook(webhook_url))
 
+    # Запускаємо додаток
     telegram_app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
