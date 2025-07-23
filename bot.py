@@ -1,6 +1,6 @@
 import os
 import threading
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -16,10 +16,18 @@ markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Flask вебсервер
 app_flask = Flask(__name__)
+telegram_app = None  # Сюди збережемо телеграм-додаток
 
 @app_flask.route("/")
 def home():
     return "Bot is running!"
+
+@app_flask.route("/webhook", methods=["POST"])
+def webhook():
+    if telegram_app:
+        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+        telegram_app.update_queue.put(update)
+    return "OK"
 
 def run_flask():
     app_flask.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
@@ -87,14 +95,19 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['action'] = None
 
 def run_telegram():
+    global telegram_app
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise ValueError("BOT_TOKEN is not set.")
-    app = ApplicationBuilder().token(token).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
-    app.run_polling()
+    telegram_app = ApplicationBuilder().token(token).build()
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
+
+    # Встановлюємо webhook
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
+    telegram_app.bot.set_webhook(webhook_url)
+    telegram_app.run_async()
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
