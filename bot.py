@@ -1,157 +1,120 @@
-import os
-import json
-import asyncio
-import datetime
+import os, json, time, threading, requests, pickle
+from datetime import datetime
 from flask import Flask, request
-from threading import Thread
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from google.oauth2.service_account import Credentials
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 from googleapiclient.discovery import build
-import httpx
+from google.oauth2.service_account import Credentials
 
-# ===== Константи =====
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GOOGLE_CREDENTIALS = json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}"))
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
-BACKUP_FILE = "data.json"
+# ======= CONFIG =======
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PING_URL = os.getenv("PING_URL")
+GOOGLE_CREDENTIALS = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+DATA_FILE = "data.pkl"
 MONTHLY_LIMIT = 40000
-ALLOWED_USERS = [84807467, 163952863]
+# ======================
 
-# ===== Ініціалізація Flask =====
-app = Flask(__name__)
-
-# ===== Данні =====
-data = {
-    "expenses": [],
-    "incomes": [],
-    "balance": MONTHLY_LIMIT,
-    "last_month_balance": 0,
-    "current_month": datetime.datetime.now().month
-}
-
-# ===== Збереження / Завантаження =====
-def save_data():
-    with open(BACKUP_FILE, "w") as f:
-        json.dump(data, f)
-
-def load_data():
-    global data
-    if os.path.exists(BACKUP_FILE):
-        with open(BACKUP_FILE, "r") as f:
-            data = json.load(f)
-
-def upload_to_drive():
+# ======= GOOGLE DRIVE CLIENT =======
+def upload_backup():
     creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS)
     service = build('drive', 'v3', credentials=creds)
-    file_metadata = {'name': f'backup_{datetime.datetime.now().strftime("%Y-%m-%d")}.json', 'parents': [GOOGLE_DRIVE_FOLDER_ID]}
-    media = open(BACKUP_FILE, 'rb')
-    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    media.close()
+    file_metadata = {'name': f'backup_{int(time.time())}.pkl', 'parents': [GOOGLE_DRIVE_FOLDER_ID]}
+    media = MediaFileUpload(DATA_FILE, mimetype='application/octet-stream')
+    service.files().create(body=file_metadata, media_body=media).execute()
+# ===================================
 
-# ===== Перевірка місяця =====
-def check_month():
-    now = datetime.datetime.now()
-    if data["current_month"] != now.month:
-        data["last_month_balance"] = data["balance"] - MONTHLY_LIMIT
-        data["balance"] = MONTHLY_LIMIT + data["last_month_balance"]
-        data["current_month"] = now.month
-        data["expenses"].clear()
-        data["incomes"].clear()
-        save_data()
-        upload_to_drive()
+# ======= DATA STORAGE =======
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "rb") as f:
+        data = pickle.load(f)
+else:
+    data = {"expenses": [], "income": [], "balance": MONTHLY_LIMIT}
 
-# ===== Команди =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    keyboard = [["Витрата", "Дохід"], ["Залишок", "Звіт"], ["Видалити останню"]]
-    await update.message.reply_text("Вітаю! Оберіть дію:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+def save_data():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump(data, f)
+    upload_backup()
+# ============================
 
-async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    try:
-        amount = float(update.message.text.split()[1])
-        data["expenses"].append(amount)
-        data["balance"] -= amount
-        save_data()
-        await update.message.reply_text(f"Додано витрату {amount} грн. Залишок: {data['balance']} грн.")
-    except:
-        await update.message.reply_text("Формат: /expense сума")
-
-async def add_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    try:
-        amount = float(update.message.text.split()[1])
-        data["incomes"].append(amount)
-        save_data()
-        await update.message.reply_text(f"Додано дохід {amount} грн.")
-    except:
-        await update.message.reply_text("Формат: /income сума")
-
-async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    await update.message.reply_text(f"Залишок: {data['balance']} грн.")
-
-async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    if data["expenses"]:
-        last = data["expenses"].pop()
-        data["balance"] += last
-        save_data()
-        await update.message.reply_text(f"Видалено останню витрату: {last} грн.")
-    else:
-        await update.message.reply_text("Немає витрат для видалення.")
-
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-    total_exp = sum(data["expenses"])
-    total_inc = sum(data["incomes"])
-    await update.message.reply_text(f"Звіт за місяць:\nВитрати: {total_exp} грн.\nДоходи: {total_inc} грн.\nЗалишок: {data['balance']} грн.")
-
-# ===== Пінг Render =====
-async def ping():
-    url = os.getenv("RENDER_EXTERNAL_URL", "")
+# ======= PING FUNCTION =======
+def ping_self():
     while True:
-        if url:
-            try:
-                async with httpx.AsyncClient() as client:
-                    await client.get(url)
-            except:
-                pass
-        await asyncio.sleep(300)
+        try:
+            if PING_URL:
+                requests.get(PING_URL)
+        except Exception as e:
+            print(f"Ping error: {e}")
+        time.sleep(300)
+threading.Thread(target=ping_self, daemon=True).start()
+# =============================
 
-# ===== Flask Webhook =====
-@app.route("/", methods=["GET"])
-def index():
-    return "Бот працює!"
+# ======= TELEGRAM BOT =======
+app = Flask(__name__)
+bot_app = ApplicationBuilder().token(TOKEN).build()
 
-@app.route("/webhook", methods=["POST"])
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("Додати витрату", callback_data="add_expense")],
+        [InlineKeyboardButton("Додати дохід", callback_data="add_income")],
+        [InlineKeyboardButton("Подивитись баланс", callback_data="check_balance")]
+    ]
+    await update.message.reply_text("Що хочеш зробити?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "add_expense":
+        await query.edit_message_text("Введи суму витрати:")
+        context.user_data["action"] = "add_expense"
+    elif query.data == "add_income":
+        await query.edit_message_text("Введи суму доходу:")
+        context.user_data["action"] = "add_income"
+    elif query.data == "check_balance":
+        await query.edit_message_text(f"Поточний баланс: {data['balance']} грн")
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    action = context.user_data.get("action")
+    if action == "add_expense":
+        try:
+            amount = float(update.message.text)
+            data["expenses"].append({"amount": amount, "date": str(datetime.now())})
+            data["balance"] -= amount
+            save_data()
+            await update.message.reply_text(f"Витрата {amount} грн додана. Баланс: {data['balance']} грн")
+        except:
+            await update.message.reply_text("Некоректне число!")
+        context.user_data.pop("action")
+    elif action == "add_income":
+        try:
+            amount = float(update.message.text)
+            data["income"].append({"amount": amount, "date": str(datetime.now())})
+            save_data()
+            await update.message.reply_text(f"Дохід {amount} грн доданий.")
+        except:
+            await update.message.reply_text("Некоректне число!")
+        context.user_data.pop("action")
+
+bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(CallbackQueryHandler(button_handler))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+# ============================
+
+# ======= FLASK WEBHOOK =======
+@app.route(f"/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot_app.bot)
     bot_app.update_queue.put_nowait(update)
     return "ok"
 
-# ===== Запуск =====
-def run_flask():
+@app.route("/")
+def home():
+    return "Bot is running!"
+# =============================
+
+if __name__ == "__main__":
+    import asyncio
+    from telegram.ext import Application
+    from googleapiclient.http import MediaFileUpload
+    asyncio.get_event_loop().run_until_complete(bot_app.bot.set_webhook(f"{PING_URL}/webhook"))
     app.run(host="0.0.0.0", port=10000)
-
-load_data()
-check_month()
-bot_app = ApplicationBuilder().token(TOKEN).build()
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CommandHandler("expense", add_expense))
-bot_app.add_handler(CommandHandler("income", add_income))
-bot_app.add_handler(CommandHandler("balance", show_balance))
-bot_app.add_handler(CommandHandler("delete", delete_last))
-bot_app.add_handler(CommandHandler("report", report))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
-
-Thread(target=run_flask).start()
-asyncio.get_event_loop().create_task(ping())
-bot_app.run_webhook(listen="0.0.0.0", port=10000, url_path="webhook", webhook_url=os.getenv("RENDER_EXTERNAL_URL") + "/webhook")
