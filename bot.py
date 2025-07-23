@@ -1,7 +1,6 @@
 import os
-from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # Доступ дозволено лише цим ID
 ALLOWED_USERS = [84807467, 163952863]
@@ -12,19 +11,6 @@ DAD_ID = 84807467
 MOM_ID = 163952863
 keyboard = [["➖ Витрати"], ["🎯 Ліміт", "💰 Баланс"]]
 markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-# Flask для Render
-app_flask = Flask(__name__)
-
-@app_flask.route("/")
-def home():
-    return "Bot is running!"
-
-@app_flask.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    telegram_app.update_queue.put(update)
-    return "OK"
 
 # Перевірка доступу
 async def check_access(update: Update):
@@ -81,24 +67,16 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['action'] = None
 
 # === Запуск
-from telegram.ext import Application
-telegram_app: Application
-
 if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
-    telegram_app = ApplicationBuilder().token(token).build()
-    telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
+    app = ApplicationBuilder().token(token).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
 
+    # Webhook
     webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
-    # Синхронно реєструємо вебхук
-    import asyncio
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(telegram_app.bot.set_webhook(webhook_url))
-
-    # Запускаємо додаток
-    telegram_app.run_webhook(
+    app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
         url_path="",
