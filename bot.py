@@ -1,17 +1,15 @@
 import os
 import json
-import asyncio
 import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 DATA_FILE = "data.json"
-BASE_LIMIT = 40000  # Еталонний ліміт
+BASE_LIMIT = 40000
 ALLOWED_USERS = [84807467, 163952863]
 DAD_ID = 84807467
 MOM_ID = 163952863
 
-# Завантаження/збереження даних
 user_data = {
     'limit': BASE_LIMIT,
     'dad_spent': 0,
@@ -32,7 +30,6 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(user_data, f)
 
-# Меню
 keyboard = [["➖ Витрати", "➕ Дохід", "↩️ Видалити витрату"],
             ["💰 Баланс"],
             ["📊 Звіт за місяць", "📚 Архів місяців"]]
@@ -44,13 +41,11 @@ async def check_access(update: Update):
         return False
     return True
 
-# Автооновлення бюджету 1-го числа
 def check_new_month():
     now = datetime.datetime.now()
     if now.month != user_data['month']:
         total_spent = user_data['dad_spent'] + user_data['mom_spent']
         carry = user_data['limit'] - total_spent
-        # Архівування старого місяця
         user_data['archive'][f"{user_data['month']}-{now.year}"] = {
             "limit": user_data['limit'],
             "dad_spent": user_data['dad_spent'],
@@ -58,7 +53,6 @@ def check_new_month():
             "income": user_data['income'],
             "carry": carry
         }
-        # Оновлення даних
         user_data['limit'] = BASE_LIMIT
         user_data['dad_spent'] = 0
         user_data['mom_spent'] = 0
@@ -69,7 +63,6 @@ def check_new_month():
         return carry
     return None
 
-# Команди
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_access(update): return
     carry = check_new_month()
@@ -164,24 +157,11 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"➖ Додано витрату: {amount} грн")
     context.user_data['action'] = None
 
-# Запуск
 if __name__ == "__main__":
     load_data()
-    token = os.getenv("BOT_TOKEN")
-    render_url = os.getenv("RENDER_EXTERNAL_URL")
-    path = "webhook"
-    webhook_url = f"{render_url}/{path}"
-
+    token = "8066278704:AAG759JUSEUzZ8-fNdepY_Y7d6IFvnX9zw4"
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"), handle_numbers))
-
-    asyncio.get_event_loop().run_until_complete(app.bot.set_webhook(webhook_url))
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
-        url_path=path,
-        webhook_url=webhook_url
-    )
-
+    app.run_polling()
