@@ -1,6 +1,9 @@
 import os
 import json
 import datetime
+import threading
+import http.server
+import socketserver
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -157,7 +160,15 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"➖ Додано витрату: {amount} грн")
     context.user_data['action'] = None
 
+# --- Фіктивний вебсервер для Render ---
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        httpd.serve_forever()
+
 if __name__ == "__main__":
+    threading.Thread(target=run_dummy_server, daemon=True).start()  # Запуск фіктивного вебсервера
     load_data()
     token = os.getenv("BOT_TOKEN")
     if not token:
