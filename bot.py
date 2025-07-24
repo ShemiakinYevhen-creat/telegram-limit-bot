@@ -159,7 +159,9 @@ async def handle_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == "__main__":
     load_data()
-    token = "8066278704:AAG759JUSEUzZ8-fNdepY_Y7d6IFvnX9zw4"
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise ValueError("BOT_TOKEN не заданий! Додайте його в Environment Variables на Render.")
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^\d]+$"), handle_buttons))
